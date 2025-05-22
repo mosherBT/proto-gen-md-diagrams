@@ -125,20 +125,41 @@ func FormatRelationships(name string, in []*Parameter) string {
 
 // Formats a Service into mermaid text
 func ServiceToMermaid(s *Service) string {
-	relationships := ""
-
 	out := fmt.Sprintf("class %s {\n  <<service>>\n", s.Name)
 	for _, m := range s.Methods {
+		// Format the method signature
 		out += fmt.Sprintf("  +%s(%s) %s\n",
 			m.Name,
 			FormatParametersForMermaid(m.InputParameters),
 			FormatParametersForMermaid(m.ReturnParameters))
 
-		relationships += FormatRelationships(s.Name, m.InputParameters)
-		relationships += FormatRelationships(s.Name, m.ReturnParameters)
+		// Add relationships for input parameters
+		for _, in := range m.InputParameters {
+			t := strings.TrimSpace(in.Type)
+			if strings.HasSuffix(t, m.Name) {
+				t = RemoveNameQualification(t)
+			}
+			if in.Stream {
+				out += fmt.Sprintf("%s --o `%s`\n", s.Name, t)
+			} else {
+				out += fmt.Sprintf("%s --> `%s`\n", s.Name, t)
+			}
+		}
+
+		// Add relationships for return parameters
+		for _, ret := range m.ReturnParameters {
+			t := strings.TrimSpace(ret.Type)
+			if strings.HasSuffix(t, m.Name) {
+				t = RemoveNameQualification(t)
+			}
+			if ret.Stream {
+				out += fmt.Sprintf("%s --o `%s`\n", s.Name, t)
+			} else {
+				out += fmt.Sprintf("%s --> `%s`\n", s.Name, t)
+			}
+		}
 	}
 	out += "}\n"
-	out += relationships
 
 	return out
 }

@@ -21,7 +21,7 @@ import (
 	"strings"
 )
 
-var RpcLinePattern = `rpc\s+(.*?)\((.*?)\)\s+returns\s+\((.*?)\)(.*)`
+var RpcLinePattern = `rpc\s+(\w+)\s*\(\s*([^)]+)\s*\)\s+returns\s*\(\s*([^)]+)\s*\)(.*)`
 
 type RpcVisitor struct {
 	Visitors       []Visitor
@@ -66,15 +66,72 @@ func (rv *RpcVisitor) Visit(scanner Scanner, in *Line, namespace string) interfa
 	ParseInArgs(values, out)
 	ParseReturnArgs(values, out)
 
+	// Only scan for options if this RPC has a block (i.e., ends with '{')
+	if in.Token == Semicolon {
+		return out
+	}
+
 	for scanner.Scan() {
 		line := scanner.ReadLine()
+
+		// Check for closing brace first
+		if line.Token == CloseBrace {
+			break
+		}
+
+		// Process options first
 		if strings.HasPrefix(line.Syntax, "option") {
 			optionName := line.Syntax[strings.Index(line.Syntax, "(")+1 : strings.Index(line.Syntax, ")")]
 			optionBody := ""
+			braceCount := 0
+
+			// First line might contain part of the option body
+			if strings.Contains(line.Syntax, "=") {
+				parts := strings.Split(line.Syntax, "=")
+				if len(parts) > 1 {
+					optionBody = strings.TrimSpace(parts[1])
+					braceCount += strings.Count(optionBody, "{")
+					braceCount -= strings.Count(optionBody, "}")
+				}
+			}
+
+			// Process multi-line options
 			for scanner.Scan() {
 				oBody := scanner.ReadLine()
+
+				// If we hit a new RPC or other non-option content, stop processing
+				if strings.HasPrefix(strings.TrimSpace(oBody.Syntax), "rpc") ||
+					strings.HasPrefix(strings.TrimSpace(oBody.Syntax), "message") ||
+					strings.HasPrefix(strings.TrimSpace(oBody.Syntax), "service") {
+					// Add the current option
+					if len(strings.TrimSpace(optionBody)) > 0 {
+						out.AddRpcOption(NewRpcOption(
+							Join(Period, namespace, out.Name),
+							optionName,
+							"",
+							optionBody))
+					}
+					// Let the service visitor handle the next RPC
+					rv := NewRpcVisitor()
+					if rv.CanVisit(oBody) {
+						rv.Visit(scanner, oBody, namespace)
+					}
+					return out
+				}
+
+				// Check if this line is just a semicolon
+				if strings.TrimSpace(oBody.Syntax) == ";" {
+					break
+				}
+
 				optionBody += oBody.Syntax
-				if line.Token == Semicolon {
+
+				// Update brace count
+				braceCount += strings.Count(oBody.Syntax, "{")
+				braceCount -= strings.Count(oBody.Syntax, "}")
+
+				// Break if we've reached the end of the option
+				if oBody.Token == Semicolon && braceCount == 0 {
 					break
 				}
 			}
@@ -85,9 +142,7 @@ func (rv *RpcVisitor) Visit(scanner Scanner, in *Line, namespace string) interfa
 					"",
 					optionBody))
 			}
-		}
-		if line.Token == CloseBrace {
-			break
+			continue
 		}
 	}
 	return out
